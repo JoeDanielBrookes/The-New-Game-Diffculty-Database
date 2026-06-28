@@ -5,28 +5,26 @@ joebrookes51@googlemail.com
 
 [Date]
 
-Hiring Manager
+Hiring Team
 Dupen Ltd
-Cirencester, GL7 1LF
 
----
+Re: Client Support Analyst
 
-Dear Hiring Manager,
+Dear Hiring Team,
 
-**Re: Client Support Analyst – Dupen Ltd**
+My CV has a slightly unusual shape for this kind of role, so I'll explain it upfront. I trained as a software tester at Sparta Global — ISTQB certified, working in an Agile environment, doing functional, performance, and accessibility testing on web applications — and then moved into an admin role at a care company. That wasn't where I expected to end up, but it's given me a different kind of experience that I think is actually quite relevant here.
 
-I am writing to apply for the Client Support Analyst position at Dupen Ltd. Having reviewed the role in detail, I believe it is an excellent fit for my background and exactly the kind of opportunity I have been looking for — one that combines customer-facing support with data work and technical growth.
+What drew me to this role specifically is that it genuinely combines things I've done separately and want to do together. The support side — handling queries, investigating issues, being the point between the customer and the internal team — is something I do daily in my current job. The testing side is where my more technical background sits. And the data work, configuring systems for new clients, understanding what the outputs should look like — that's the kind of problem-solving I find genuinely interesting. Most roles ask for one of these. This one asks for all three, which is why it stood out.
 
-My experience spans customer service, software testing, and administration, which maps directly onto the three core areas of this role. In my current position as Administrator at Kind Tailored Care, I act as a central point of contact for clients and internal teams, managing queries, investigating issues, and ensuring smooth day-to-day operations. Prior to this, as a Software Tester and Business Analyst at Sparta Global, I carried out functional, performance, and accessibility testing on web-based systems, documented defects clearly, and worked within Agile teams to support delivery. I am ISTQB certified and comfortable applying structured testing methodologies — which I understand forms a significant part of this role.
+On the Excel and data side, I'm comfortable with sorting, filtering, and working through data to find what's wrong. On XML and SQL, I've had practical exposure through my testing work, so the training you mentioned would be building on something rather than starting from scratch — which is a good position to be in.
 
-On the data side, I have working knowledge of SQL and XML through both my training and practical testing work, meaning the additional training Dupen offers in these areas would build on a solid foundation rather than starting from scratch. I am also proficient with Microsoft Office, including using Excel for sorting, filtering, and working with data sets.
+The testing part of the role is worth picking up on specifically. At Sparta, one of the things I got good at was approaching a system change or a new output and asking the right questions before I started checking it — what's it supposed to do, what could reasonably go wrong, what would the user actually notice. That systematic way of thinking doesn't switch off, and I think it's useful in a support context too. When something's not working, the instinct to investigate properly rather than just escalate is something you either have or you don't.
 
-I am drawn to this role specifically because it offers more than a conventional support position. The opportunity to investigate issues in depth, contribute to client system setup, and develop analytical and technical skills within a supportive team is exactly the kind of environment where I know I can grow and add real value.
+I'll be honest about one gap: I haven't worked in a formal B2B software support environment with a ticketing or client portal system. What I have done is manage a defect lifecycle end to end in a testing context, which is structurally pretty similar — raise it, document it clearly, track it, verify it's fixed. I'd expect the tooling to be learnable quickly.
 
-The hybrid arrangement after training — based in the Cirencester area — suits me well, and I am eager to contribute to a company with strong long-term career potential.
+The year in admin has been useful in ways I didn't expect. It's made me much more deliberate about documentation and handover — if I'm dealing with a client issue, I make sure there's a record that someone else could pick up without needing to come back to me. It's also given me a sharper sense of what it's like to be on the user side of a system that doesn't quite work the way you need it to, which I think is a useful thing to carry into a support role.
 
-I would welcome the opportunity to discuss my application further. Please do not hesitate to contact me at the details above.
+Thank you for your time. I hope to hear from you.
 
-Yours sincerely,
-
+Kind regards,
 Joe Brookes

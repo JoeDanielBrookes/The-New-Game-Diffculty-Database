@@ -555,6 +555,69 @@ def find_similar_images(roots: Sequence[str],
 
 
 # --------------------------------------------------------------------------
+# Folder priority rules
+# --------------------------------------------------------------------------
+
+RULE_KEEP_FIRST = "keep_first"
+RULE_NEVER_REMOVE = "never_remove"
+RULE_REMOVE_FIRST = "remove_first"
+RULE_LABELS = {
+    RULE_KEEP_FIRST: "Keep first",
+    RULE_NEVER_REMOVE: "Never remove",
+    RULE_REMOVE_FIRST: "Remove first",
+}
+# Lower ranks are kept in preference to higher ones. Copies in Never remove
+# folders are always kept anyway, so when choosing the one copy to keep, a
+# Keep first copy is preferred: both then survive.
+_RULE_RANK = {RULE_KEEP_FIRST: 0, RULE_NEVER_REMOVE: 1, None: 2,
+              RULE_REMOVE_FIRST: 3}
+
+
+@dataclass
+class FolderRule:
+    """A priority rule for every file inside *folder* (and its subfolders).
+
+    * ``keep_first``: copies here are kept in preference to all others.
+    * ``never_remove``: copies here are never marked or removed (protected).
+    * ``remove_first``: copies here are removed in preference to all others.
+
+    The folder doesn't need to be one of the scanned folders; it can be any
+    folder, e.g. a single subfolder deep inside one. When rules overlap, the
+    most specific (deepest) folder wins.
+    """
+    folder: str
+    rule: str
+
+    def __post_init__(self) -> None:
+        if self.rule not in RULE_LABELS:
+            raise ValueError(f"Unknown folder rule: {self.rule}")
+
+
+def is_inside(path: str, folder: str) -> bool:
+    """True if *path* is *folder* itself or anywhere inside it."""
+    p, f = _norm(path), _norm(folder)
+    try:
+        return os.path.commonpath([p, f]) == f
+    except ValueError:  # Different drives on Windows.
+        return False
+
+
+def rule_for(path: str, rules: Sequence[FolderRule]) -> Optional[str]:
+    """The rule that applies to *path*: the deepest matching folder wins."""
+    best, best_len = None, -1
+    for r in rules:
+        if is_inside(path, r.folder):
+            length = len(_norm(r.folder))
+            if length > best_len:
+                best, best_len = r.rule, length
+    return best
+
+
+def is_protected(path: str, rules: Sequence[FolderRule]) -> bool:
+    return rule_for(path, rules) == RULE_NEVER_REMOVE
+
+
+# --------------------------------------------------------------------------
 # Choosing which copy to keep
 # --------------------------------------------------------------------------
 
@@ -572,29 +635,51 @@ DEFAULT_SIMILAR_TIEBREAK = "Highest resolution"
 
 def choose_keeper(group: DuplicateGroup,
                   tiebreak: str = DEFAULT_TIEBREAK,
-                  prefer_quality: bool = False) -> FileEntry:
+                  prefer_quality: bool = False,
+                  rules: Sequence[FolderRule] = ()) -> FileEntry:
     """Pick the copy to keep.
 
-    Normally that's the copy in the highest-priority folder, with *tiebreak*
-    deciding between copies in equally ranked folders (e.g. the same folder).
+    Copies are ranked by, in order:
+
+    1. folder rules (*Keep first*, then *Never remove*, then folders with no
+       rule, then *Remove first*),
+    2. the order of the scanned folders,
+    3. *tiebreak*, for copies that are still equal (e.g. in the same folder).
+
     With *prefer_quality*, the highest-resolution (then largest) image is
-    kept wherever it is, and folder priority only breaks ties.
+    kept wherever it is, and the steps above only break ties.
     """
     key = TIEBREAKS[tiebreak]
-    if prefer_quality:
-        return min(group.files, key=lambda f: (-f.pixels, -f.size, f.root_index)
-                   + tuple(key(f)))
-    return min(group.files, key=lambda f: (f.root_index,) + tuple(key(f)))
+
+    def rank(f: FileEntry) -> tuple:
+        folder_rank = (_RULE_RANK[rule_for(f.path, rules)], f.root_index)
+        if prefer_quality:
+            return (-f.pixels, -f.size) + folder_rank + tuple(key(f))
+        return folder_rank + tuple(key(f))
+
+    return min(group.files, key=rank)
+
+
+def files_to_remove(group: DuplicateGroup, tiebreak: str = DEFAULT_TIEBREAK,
+                    prefer_quality: bool = False,
+                    rules: Sequence[FolderRule] = ()) -> List[FileEntry]:
+    """Every copy except the keeper and any in *Never remove* folders."""
+    keeper = choose_keeper(group, tiebreak, prefer_quality, rules)
+    return [f for f in group.files
+            if f is not keeper and not is_protected(f.path, rules)]
 
 
 def auto_plan(groups: Sequence[DuplicateGroup],
               tiebreak: str = DEFAULT_TIEBREAK,
-              prefer_quality: bool = False) -> List[RemovalItem]:
-    """Keep one copy per group and mark the rest for removal."""
+              prefer_quality: bool = False,
+              rules: Sequence[FolderRule] = ()) -> List[RemovalItem]:
+    """Keep one copy per group (plus protected copies); remove the rest."""
     plan = []
     for g in groups:
-        keeper = choose_keeper(g, tiebreak, prefer_quality)
-        plan.append(RemovalItem(keeper, [f for f in g.files if f is not keeper]))
+        keeper = choose_keeper(g, tiebreak, prefer_quality, rules)
+        remove = files_to_remove(g, tiebreak, prefer_quality, rules)
+        if remove:
+            plan.append(RemovalItem(keeper, remove))
     return plan
 
 
@@ -652,13 +737,15 @@ def remove_duplicates(items: Sequence[RemovalItem], method: str,
                       move_to: Optional[str] = None,
                       roots: Sequence[str] = (),
                       verify: bool = True,
-                      progress: Optional[ProgressFn] = None) -> RemovalResult:
+                      progress: Optional[ProgressFn] = None,
+                      rules: Sequence[FolderRule] = ()) -> RemovalResult:
     """Remove the copies listed in *items*.
 
     With *verify* on (the default), each group's kept copy is checked first
     and nothing in that group is removed if it's missing or has changed. Each
     copy to be removed is also checked, so a file edited since the scan is
-    never removed.
+    never removed. Files in *Never remove* folders (see *rules*) are always
+    left alone, even if they were listed.
     """
     if method not in REMOVAL_METHODS:
         raise ValueError(f"Unknown removal method: {method}")
@@ -693,6 +780,10 @@ def remove_duplicates(items: Sequence[RemovalItem], method: str,
             try:
                 if _norm(os.path.realpath(f.path)) == keeper_norm:
                     result.skipped.append((f.path, "This is the kept copy."))
+                    continue
+                if is_protected(f.path, rules):
+                    result.skipped.append(
+                        (f.path, "It's in a folder marked Never remove."))
                     continue
                 if not _unchanged(f, verify):
                     result.skipped.append(

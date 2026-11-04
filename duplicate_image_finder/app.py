@@ -1,10 +1,11 @@
-"""Duplicate Image Finder: a desktop app for finding identical images.
+"""Duplicate Image Finder: a desktop app for finding duplicate and similar images.
 
 Run with:  python app.py
 """
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -44,6 +45,28 @@ def open_in_file_manager(path: str) -> None:
         subprocess.Popen(["xdg-open", os.path.dirname(path)])
 
 
+def settings_path() -> str:
+    """Per-user settings file (kept when the app is updated)."""
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+        return os.path.join(base, APP_TITLE, "settings.json")
+    if sys.platform == "darwin":
+        return os.path.expanduser(
+            f"~/Library/Application Support/{APP_TITLE}/settings.json")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "duplicate-image-finder", "settings.json")
+
+
+RULE_HELP = (
+    "Rules apply to a folder and everything inside it, and can be any folder, "
+    "such as one subfolder of a scanned folder. Keep first: copies here are "
+    "kept over copies anywhere else. Never remove: copies here are never "
+    "removed. Remove first: copies here are removed before any others. "
+    "Rules beat the order of the scanned folders, and the deepest matching "
+    "folder wins. Tip: right-click a file in the results to add a rule for "
+    "its folder.")
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -52,6 +75,7 @@ class App(tk.Tk):
         self.minsize(900, 600)
 
         self.folders: list[str] = []
+        self.rules: list[core.FolderRule] = []
         self.scan_roots: list[str] = []
         self.scan_mode = core.MODE_IDENTICAL
         self.groups: list[core.DuplicateGroup] = []
@@ -64,7 +88,84 @@ class App(tk.Tk):
 
         self._set_icon()
         self._build_ui()
+        self._load_settings()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)
+
+    # ------------------------------------------------------------------
+    # Settings (folders, rules and options are remembered between runs)
+    # ------------------------------------------------------------------
+
+    def _settings(self) -> dict:
+        return {
+            "folders": self.folders,
+            "rules": [{"folder": r.folder, "rule": r.rule} for r in self.rules],
+            "mode": self.mode.get(),
+            "similarity": self.similarity.get(),
+            "only_images": self.only_images.get(),
+            "extensions": self.ext_var.get(),
+            "include_hidden": self.include_hidden.get(),
+            "tiebreak": self.tiebreak.get(),
+            "prefer_quality": self.prefer_quality.get(),
+            "method": self.method.get(),
+            "move_to": self.move_to.get(),
+        }
+
+    def _save_settings(self) -> None:
+        try:
+            path = settings_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self._settings(), fh, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            pass  # Never let saving preferences break the app.
+
+    def _load_settings(self) -> None:
+        try:
+            with open(settings_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        try:
+            self.folders = [str(f) for f in data.get("folders", [])]
+            self.rules = []
+            for r in data.get("rules", []):
+                try:
+                    self.rules.append(core.FolderRule(str(r["folder"]), r["rule"]))
+                except (KeyError, TypeError, ValueError):
+                    pass
+            if data.get("mode") == core.MODE_SIMILAR and core.HAS_SIMILAR_SUPPORT:
+                self.mode.set(core.MODE_SIMILAR)
+            similarity = int(data.get("similarity", core.DEFAULT_SIMILARITY))
+            self.similarity_scale.set(max(70, min(100, similarity)))
+            self.only_images.set(bool(data.get("only_images", True)))
+            if data.get("extensions"):
+                self.ext_var.set(str(data["extensions"]))
+            self.include_hidden.set(bool(data.get("include_hidden", False)))
+            if data.get("tiebreak") in core.TIEBREAKS:
+                self.tiebreak.set(data["tiebreak"])
+            self.prefer_quality.set(bool(data.get("prefer_quality", False)))
+            method = data.get("method")
+            if method in core.REMOVAL_METHODS and not (
+                    method == core.METHOD_TRASH and core.send2trash is None):
+                self.method.set(method)
+            if data.get("move_to"):
+                self.move_to.set(str(data["move_to"]))
+        except Exception:
+            pass
+        tiebreak = self.tiebreak.get()
+        self._update_mode_state()
+        self.tiebreak.set(tiebreak)  # Keep the saved choice.
+        self._update_method_state()
+        self._refresh_folders()
+        self._refresh_rules()
+
+    def _on_close(self) -> None:
+        self.cancel_event.set()
+        self._save_settings()
+        self.destroy()
 
     def _set_icon(self) -> None:
         assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -94,9 +195,15 @@ class App(tk.Tk):
         top.grid(row=0, column=0, sticky="nsew", **pad)
         top.columnconfigure(0, weight=1)
 
-        folders = ttk.LabelFrame(top, text="Folders to scan (highest priority first)")
-        folders.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.folder_buttons = []  # Disabled while a scan or removal runs.
+        self.folder_tabs = ttk.Notebook(top)
+        self.folder_tabs.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        folders = ttk.Frame(self.folder_tabs)
         folders.columnconfigure(0, weight=1)
+        self.folder_tabs.add(folders, text="Folders to scan (highest priority first)")
+        rules_tab = ttk.Frame(self.folder_tabs)
+        self.folder_tabs.add(rules_tab, text="Priority rules")
+        self._build_rules_tab(rules_tab)
         self.folder_list = tk.Listbox(folders, height=6, activestyle="none",
                                       selectmode="extended")
         self.folder_list.grid(row=0, column=0, rowspan=5, sticky="nsew",
@@ -105,7 +212,6 @@ class App(tk.Tk):
                             command=self.folder_list.yview)
         fsb.grid(row=0, column=1, rowspan=5, sticky="ns", pady=6)
         self.folder_list.configure(yscrollcommand=fsb.set)
-        self.folder_buttons = []
         for row, (label, cmd) in enumerate((
             ("Add folder…", self.add_folder),
             ("Remove", self.remove_folder),
@@ -120,7 +226,7 @@ class App(tk.Tk):
             text="When the same image is in more than one folder, the copy in "
                  "the folder highest in this list is kept and the others are "
                  "marked for removal. Put the folder you want cleaned out at "
-                 "the bottom.",
+                 "the bottom. Use Priority rules for finer control.",
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         options = ttk.LabelFrame(top, text="Options")
@@ -222,7 +328,7 @@ class App(tk.Tk):
         self.tree.heading("size", text="Size")
         self.tree.heading("modified", text="Modified")
         self.tree.column("#0", width=230, stretch=False)
-        self.tree.column("action", width=70, anchor="center", stretch=False)
+        self.tree.column("action", width=85, anchor="center", stretch=False)
         self.tree.column("match", width=80, anchor="center", stretch=False)
         self.tree.column("folder", width=280)
         self.tree.column("dimensions", width=95, anchor="center", stretch=False)
@@ -232,6 +338,7 @@ class App(tk.Tk):
         self.tree.tag_configure("keep", foreground="#1b6e2a")
         self.tree.tag_configure("remove", foreground="#b3261e",
                                 background="#fdecea")
+        self.tree.tag_configure("protected", foreground="#1d4ed8")
         self.tree.grid(row=0, column=0, sticky="nsew")
         ysb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         ysb.grid(row=0, column=1, sticky="ns")
@@ -263,6 +370,15 @@ class App(tk.Tk):
         self.menu.add_command(label="Switch Keep / Remove",
                               command=self.toggle_selected)
         self.menu.add_separator()
+        rule_menu = tk.Menu(self.menu, tearoff=False)
+        for rule, label in core.RULE_LABELS.items():
+            rule_menu.add_command(
+                label=label, command=lambda r=rule: self.rule_for_selected_folder(r))
+        rule_menu.add_separator()
+        rule_menu.add_command(label="Clear rule",
+                              command=lambda: self.rule_for_selected_folder(None))
+        self.menu.add_cascade(label="Rule for this file's folder", menu=rule_menu)
+        self.menu.add_separator()
         self.menu.add_command(label="Show in folder", command=self.show_selected)
 
         # --- Removal -------------------------------------------------
@@ -278,7 +394,7 @@ class App(tk.Tk):
                                     width=18)
         tiebreak_box.grid(row=0, column=2, sticky="w", pady=(6, 2))
         tiebreak_box.bind("<<ComboboxSelected>>", lambda e: self.auto_select())
-        self.auto_button = ttk.Button(bottom, text="Auto-select by folder priority",
+        self.auto_button = ttk.Button(bottom, text="Auto-select by priority & rules",
                                       command=self.auto_select)
         self.auto_button.grid(row=0, column=3, padx=6, pady=(6, 2))
         self.keep_all_button = ttk.Button(bottom, text="Keep all",
@@ -361,6 +477,119 @@ class App(tk.Tk):
         self.move_entry.configure(state=state)
         self.move_browse.configure(state=state)
 
+    def _build_rules_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        self.rules_tree = ttk.Treeview(parent, columns=("rule", "folder"),
+                                       show="headings", height=4,
+                                       selectmode="extended")
+        self.rules_tree.heading("rule", text="Rule")
+        self.rules_tree.heading("folder", text="Folder")
+        self.rules_tree.column("rule", width=110, stretch=False)
+        self.rules_tree.column("folder", width=380)
+        self.rules_tree.tag_configure(core.RULE_KEEP_FIRST, foreground="#1b6e2a")
+        self.rules_tree.tag_configure(core.RULE_NEVER_REMOVE, foreground="#1d4ed8")
+        self.rules_tree.tag_configure(core.RULE_REMOVE_FIRST, foreground="#b3261e")
+        self.rules_tree.grid(row=0, column=0, rowspan=4, sticky="nsew",
+                             padx=(6, 0), pady=6)
+        rsb = ttk.Scrollbar(parent, orient="vertical",
+                            command=self.rules_tree.yview)
+        rsb.grid(row=0, column=1, rowspan=4, sticky="ns", pady=6)
+        self.rules_tree.configure(yscrollcommand=rsb.set)
+        self.rules_tree.bind("<<TreeviewSelect>>", self._on_rule_select)
+        self.rules_tree.bind("<Delete>", lambda e: self.remove_rules())
+
+        self.rule_choice = tk.StringVar(value=core.RULE_LABELS[core.RULE_KEEP_FIRST])
+        rule_box = ttk.Combobox(parent, textvariable=self.rule_choice,
+                                state="readonly", width=13,
+                                values=list(core.RULE_LABELS.values()))
+        rule_box.grid(row=0, column=2, sticky="ew", padx=6, pady=(6, 2))
+        rule_box.bind("<<ComboboxSelected>>", lambda e: self.apply_rule_choice())
+        b1 = ttk.Button(parent, text="Add folder…", width=12, command=self.add_rule)
+        b1.grid(row=1, column=2, sticky="ew", padx=6, pady=2)
+        b2 = ttk.Button(parent, text="Remove", width=12, command=self.remove_rules)
+        b2.grid(row=2, column=2, sticky="ew", padx=6, pady=2)
+        self.folder_buttons += [b1, b2]
+        ttk.Label(parent, wraplength=520, foreground="#555", text=RULE_HELP).grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
+
+    # ------------------------------------------------------------------
+    # Priority rules
+    # ------------------------------------------------------------------
+
+    def _rule_from_label(self, label: str) -> str:
+        return next(k for k, v in core.RULE_LABELS.items() if v == label)
+
+    def _refresh_rules(self, select: list | None = None) -> None:
+        self.rules_tree.delete(*self.rules_tree.get_children())
+        self.rules.sort(key=lambda r: r.folder.lower())
+        for i, r in enumerate(self.rules):
+            self.rules_tree.insert("", "end", str(i), tags=(r.rule,),
+                                   values=(core.RULE_LABELS[r.rule], r.folder))
+        if select:
+            ids = [str(i) for i, r in enumerate(self.rules)
+                   if os.path.normcase(r.folder) in select]
+            self.rules_tree.selection_set(ids)
+        count = f" ({len(self.rules)})" if self.rules else ""
+        self.folder_tabs.tab(1, text=f"Priority rules{count}")
+
+    def _on_rule_select(self, _event=None) -> None:
+        sel = self.rules_tree.selection()
+        if len(sel) == 1:
+            self.rule_choice.set(core.RULE_LABELS[self.rules[int(sel[0])].rule])
+
+    def set_rule(self, folder: str, rule: str | None) -> None:
+        """Add, change or (with rule=None) remove the rule for a folder."""
+        folder = os.path.normpath(folder)
+        key = os.path.normcase(folder)
+        self.rules = [r for r in self.rules if os.path.normcase(r.folder) != key]
+        if rule is not None:
+            self.rules.append(core.FolderRule(folder, rule))
+        self._refresh_rules(select=[key])
+        self._rules_changed()
+
+    def _rules_changed(self) -> None:
+        self._save_settings()
+        if self.groups and not self.busy:
+            self.auto_select()
+            self.status.set("Priority rules changed: files were re-selected.")
+
+    def add_rule(self) -> None:
+        path = filedialog.askdirectory(
+            parent=self, mustexist=True,
+            title=f"Choose a folder to mark “{self.rule_choice.get()}”")
+        if path:
+            self.set_rule(path, self._rule_from_label(self.rule_choice.get()))
+
+    def apply_rule_choice(self) -> None:
+        """Change the rule of the selected rows to the chosen rule."""
+        sel = self.rules_tree.selection()
+        if not sel:
+            return
+        rule = self._rule_from_label(self.rule_choice.get())
+        keys = []
+        for iid in sel:
+            self.rules[int(iid)].rule = rule
+            keys.append(os.path.normcase(self.rules[int(iid)].folder))
+        self._refresh_rules(select=keys)
+        self._rules_changed()
+
+    def remove_rules(self) -> None:
+        sel = {int(i) for i in self.rules_tree.selection()}
+        if not sel:
+            return
+        self.rules = [r for i, r in enumerate(self.rules) if i not in sel]
+        self._refresh_rules()
+        self._rules_changed()
+
+    def rule_for_selected_folder(self, rule: str | None) -> None:
+        idx = self._selected_file()
+        if idx is None or self.busy:
+            return
+        folder = os.path.dirname(self.groups[idx[0]].files[idx[1]].path)
+        self.set_rule(folder, rule)
+        label = core.RULE_LABELS[rule] if rule else "No rule"
+        self.status.set(f"{label}: {folder}")
+
     # ------------------------------------------------------------------
     # Folder list
     # ------------------------------------------------------------------
@@ -384,11 +613,13 @@ class App(tk.Tk):
             return
         self.folders.append(path)
         self._refresh_folders(len(self.folders) - 1)
+        self._save_settings()
 
     def remove_folder(self) -> None:
         for i in sorted(self.folder_list.curselection(), reverse=True):
             del self.folders[i]
         self._refresh_folders()
+        self._save_settings()
 
     def move_folder(self, step: int) -> None:
         sel = self.folder_list.curselection()
@@ -398,6 +629,7 @@ class App(tk.Tk):
         if 0 <= j < len(self.folders):
             self.folders[i], self.folders[j] = self.folders[j], self.folders[i]
             self._refresh_folders(j)
+            self._save_settings()
 
     def choose_move_folder(self) -> None:
         path = filedialog.askdirectory(parent=self,
@@ -505,6 +737,7 @@ class App(tk.Tk):
                 messagebox.showinfo(APP_TITLE, "Enter at least one file extension.")
                 return
         self.scan_roots = list(self.folders)
+        self._save_settings()
         self._clear_results()
         self.scan_mode = mode
         self._scan_started = time.monotonic()
@@ -581,11 +814,19 @@ class App(tk.Tk):
                 self._refresh_row(gi, fi)
         self._update_summary()
 
+    def _is_protected(self, gi: int, fi: int) -> bool:
+        return core.is_protected(self.groups[gi].files[fi].path, self.rules)
+
     def _refresh_row(self, gi: int, fi: int) -> None:
         iid = f"g{gi}f{fi}"
-        remove = (gi, fi) in self.marked
-        self.tree.set(iid, "action", "Remove" if remove else "Keep")
-        self.tree.item(iid, tags=("remove" if remove else "keep",))
+        if (gi, fi) in self.marked:
+            action, tag = "Remove", "remove"
+        elif self._is_protected(gi, fi):
+            action, tag = "Protected", "protected"
+        else:
+            action, tag = "Keep", "keep"
+        self.tree.set(iid, "action", action)
+        self.tree.item(iid, tags=(tag,))
 
     def _update_summary(self) -> None:
         count = len(self.marked)
@@ -606,9 +847,10 @@ class App(tk.Tk):
         self.marked.clear()
         prefer_quality = self.results_are_similar and self.prefer_quality.get()
         for gi, g in enumerate(self.groups):
-            keeper = core.choose_keeper(g, self.tiebreak.get(), prefer_quality)
+            remove = core.files_to_remove(g, self.tiebreak.get(), prefer_quality,
+                                          self.rules)
             for fi, f in enumerate(g.files):
-                if f is not keeper:
+                if any(f is r for r in remove):
                     self.marked.add((gi, fi))
         self._populate_tree()
 
@@ -628,6 +870,11 @@ class App(tk.Tk):
         if idx in self.marked:
             self.marked.discard(idx)
         else:
+            if self._is_protected(gi, fi):
+                self.bell()
+                self.status.set("This file is in a folder marked Never remove. "
+                                "Change its rule on the Priority rules tab.")
+                return
             group_size = len(self.groups[gi].files)
             marked_in_group = sum(1 for g, _ in self.marked if g == gi)
             if marked_in_group + 1 >= group_size:
@@ -644,7 +891,7 @@ class App(tk.Tk):
             return
         gi, keep_fi = idx
         for fi in range(len(self.groups[gi].files)):
-            if fi == keep_fi:
+            if fi == keep_fi or self._is_protected(gi, fi):
                 self.marked.discard((gi, fi))
             else:
                 self.marked.add((gi, fi))
@@ -687,6 +934,9 @@ class App(tk.Tk):
             lines.append(f"{f.width} × {f.height} pixels")
         lines.append("Modified "
                      + time.strftime("%Y-%m-%d %H:%M", time.localtime(f.mtime)))
+        rule = core.rule_for(f.path, self.rules)
+        if rule:
+            lines.append(f"Folder rule: {core.RULE_LABELS[rule]}")
         if g.kind == core.MODE_SIMILAR and f.similarity is not None:
             lines.append(f"{f.similarity:.0f}% similar to the best image "
                          "in this group")
@@ -720,9 +970,9 @@ class App(tk.Tk):
     # Removal
     # ------------------------------------------------------------------
 
-    def _removal_job(self, plan, method, move_to, roots, progress):
+    def _removal_job(self, plan, method, move_to, roots, rules, progress):
         return core.remove_duplicates(plan, method, move_to, roots,
-                                      progress=progress)
+                                      progress=progress, rules=rules)
 
     def remove_marked(self) -> None:
         if self.busy or not self.marked:
@@ -762,7 +1012,7 @@ class App(tk.Tk):
             return
         self.status.set("Removing files…")
         self._run_in_background(self._removal_job, plan, method, move_to,
-                                list(self.scan_roots))
+                                list(self.scan_roots), list(self.rules))
 
     def _removal_finished(self, result: core.RemovalResult) -> None:
         removed = {os.path.normcase(p) for p in result.removed}

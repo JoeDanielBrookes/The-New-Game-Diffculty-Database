@@ -84,7 +84,8 @@ install it with `sudo apt install python3-tk`.
 3. **Copies are marked automatically by folder location.** In each group, the
    copy in the highest folder in the list is kept (green) and the others are
    marked *Remove* (red). Put the folder you want cleaned out at the bottom
-   of the list.
+   of the list, or use [folder priority rules](#folder-priority-rules) for
+   more control.
    - If several copies are in equally ranked folders (for example two copies in
      the same folder), the *"keep the"* setting decides: oldest file, newest
      file, highest resolution, largest file, shortest path or alphabetical path.
@@ -101,10 +102,41 @@ install it with `sudo apt install python3-tk`.
      their folder structure kept, so they're easy to put back.
    - **Delete permanently**
 
+## Folder priority rules
+
+The order of the scanned folders is a simple way to say which copies to keep.
+For finer control, open the **Priority rules** tab next to the folder list and
+add rules for specific folders:
+
+| Rule | What it does |
+|------|--------------|
+| **Keep first** | Copies here are kept in preference to copies anywhere else. |
+| **Never remove** | Copies here are protected. They're never marked for removal (even by hand) and are never removed. |
+| **Remove first** | Copies here are removed in preference to copies anywhere else. |
+
+- A rule covers a folder **and everything inside it**. It can be any folder,
+  including one subfolder deep inside a scanned folder, e.g. mark
+  `Pictures/Favourites` *Keep first* while scanning all of `Pictures`.
+- When rules overlap, the **deepest folder wins**. So you can mark
+  `Backup` *Remove first* but `Backup/Originals` *Never remove*.
+- Rules come before the folder order. The order then breaks ties between
+  folders with the same rule, then the *"keep the"* setting decides.
+- If a group has a *Keep first* copy and copies in *Never remove* folders,
+  all of them are kept.
+- **Shortcut:** right-click any file in the results and choose
+  **Rule for this file's folder**.
+- Changing a rule re-selects the files straight away. Protected files show
+  as **Protected** in blue.
+
+Your folders, rules and options are saved automatically and restored the next
+time you open the app.
+
 ## Safety
 
 - At least one copy of every image is always kept. You can't mark the last
   copy for removal.
+- Files in *Never remove* folders are never removed, even if something else
+  marks them.
 - Just before removal, the kept copy and every copy being removed are checked
   again. Exact copies are re-hashed. For similar images, the size and
   modification time are compared. If anything is missing or has changed since

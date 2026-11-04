@@ -29,10 +29,42 @@ The Match column shows *Identical* for exact copies. For similar images it
 shows how close each image is to the highest-resolution image in its group,
 and the Dimensions column shows each image's size in pixels.
 
-## Running it
+## Installing it on your computer (with a desktop shortcut)
 
-You need Python 3.9 or newer. Tkinter ships with the python.org installers for
-Windows and macOS. On Linux, install it with `sudo apt install python3-tk`.
+1. **Install Python 3.9 or newer** if you don't already have it, from
+   [python.org](https://www.python.org/downloads/). On Windows, tick
+   **"Add python.exe to PATH"** during setup.
+2. Download this `duplicate_image_finder` folder, for example as a zip from
+   GitHub, and unzip it.
+3. Run the installer for your system:
+   - **Windows:** double-click **`Install on Windows.bat`**. If Windows
+     SmartScreen warns you, click *More info → Run anyway*.
+   - **macOS:** double-click **`Install on Mac.command`**. If macOS says it
+     can't be opened, right-click it, choose *Open*, then *Open* again.
+   - **Linux:** run `sh install_linux.sh`. It needs `python3-tk` and
+     `python3-venv`, e.g. `sudo apt install python3-tk python3-venv`.
+4. Open **Duplicate Image Finder** from the new shortcut on your desktop. The
+   installer also adds it to the Start menu (Windows), `~/Applications`
+   (macOS) or your app launcher (Linux).
+
+The installer doesn't need administrator rights. It copies the app to a
+folder in your user account and installs the extras (Pillow, send2trash,
+pillow-heif) into a private Python environment, so your other Python
+programs aren't affected:
+
+| System  | Installed to |
+|---------|--------------|
+| Windows | `%LOCALAPPDATA%\Programs\Duplicate Image Finder` |
+| macOS   | `~/Library/Application Support/Duplicate Image Finder` |
+| Linux   | `~/.local/share/duplicate-image-finder` |
+
+Afterwards you can delete the downloaded folder. To **update**, download the
+new version and run the installer again. To **uninstall**, run the installer
+with `--uninstall` (for example `py installer.py --uninstall` on Windows or
+`python3 installer.py --uninstall` on macOS or Linux), or delete the folder
+above and the shortcuts.
+
+## Running it without installing
 
 ```bash
 cd duplicate_image_finder
@@ -40,12 +72,8 @@ pip install -r requirements.txt   # optional, see below
 python app.py
 ```
 
-Optional extras in `requirements.txt`:
-
-- **Pillow**: needed for *Similar images* mode. It also shows previews for
-  JPEG, WebP and other formats. PNG and GIF previews work without it.
-- **send2trash**: enables "Recycle Bin / Trash" as a removal option.
-- **pillow-heif**: lets *Similar images* mode read HEIC/HEIF iPhone photos.
+Tkinter ships with the python.org installers for Windows and macOS. On Linux,
+install it with `sudo apt install python3-tk`.
 
 ## How to use it
 

@@ -62,8 +62,23 @@ class App(tk.Tk):
         self.messages: queue.Queue = queue.Queue()
         self._preview_image = None
 
+        self._set_icon()
         self._build_ui()
         self.after(100, self._poll_messages)
+
+    def _set_icon(self) -> None:
+        assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+        try:
+            if sys.platform.startswith("win"):
+                # Show the app's own icon in the taskbar instead of Python's.
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "local.DuplicateImageFinder")
+                self.iconbitmap(default=os.path.join(assets, "icon.ico"))
+            self._icon = tk.PhotoImage(file=os.path.join(assets, "icon.png"))
+            self.iconphoto(True, self._icon)
+        except Exception:
+            pass  # The icon is cosmetic; never fail because of it.
 
     # ------------------------------------------------------------------
     # Layout

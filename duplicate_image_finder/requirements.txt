@@ -1,0 +1,3 @@
+# Both are optional. The app runs with plain Python (3.8+) without them.
+send2trash>=1.8    # Lets removed files go to the Recycle Bin / Trash
+Pillow>=9.0        # Previews for JPEG, WebP and other formats (PNG/GIF work without it)

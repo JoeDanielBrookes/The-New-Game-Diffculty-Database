@@ -1,3 +1,5 @@
-# Both are optional. The app runs with plain Python (3.8+) without them.
+# All optional. The app runs with plain Python (3.9+) without them, in
+# "Identical files" mode only.
+Pillow>=9.0        # Needed for "Similar images" mode, and for JPEG/WebP previews
 send2trash>=1.8    # Lets removed files go to the Recycle Bin / Trash
-Pillow>=9.0        # Previews for JPEG, WebP and other formats (PNG/GIF work without it)
+pillow-heif>=0.10  # Lets similar-image mode read HEIC/HEIF phone photos

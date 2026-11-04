@@ -17,13 +17,13 @@ from tkinter import filedialog, messagebox, ttk
 import core
 
 try:  # Optional: previews for JPEG, WebP and other formats.
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageOps, ImageTk
 except ImportError:  # pragma: no cover - depends on the environment
-    Image = ImageTk = None
+    Image = ImageOps = ImageTk = None
 
 
 APP_TITLE = "Duplicate Image Finder"
-PREVIEW_SIZE = 260
+PREVIEW_SIZE = 170
 
 
 def human_size(n: float) -> str:
@@ -48,11 +48,12 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1150x760")
+        self.geometry("1150x820")
         self.minsize(900, 600)
 
         self.folders: list[str] = []
         self.scan_roots: list[str] = []
+        self.scan_mode = core.MODE_IDENTICAL
         self.groups: list[core.DuplicateGroup] = []
         self.marked: set[tuple[int, int]] = set()  # (group, file) to remove
         self.item_map: dict[str, tuple[int, int]] = {}  # tree id -> indexes
@@ -109,25 +110,66 @@ class App(tk.Tk):
 
         options = ttk.LabelFrame(top, text="Options")
         options.grid(row=0, column=1, sticky="nsew")
+        options.columnconfigure(1, weight=1)
+
+        ttk.Label(options, text="Find:").grid(row=0, column=0, sticky="w",
+                                             padx=6, pady=(6, 0))
+        self.mode = tk.StringVar(value=core.MODE_IDENTICAL)
+        ttk.Radiobutton(options, text="Identical files (exact copies)",
+                        value=core.MODE_IDENTICAL, variable=self.mode,
+                        command=self._update_mode_state).grid(
+            row=0, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        similar_text = "Similar images (resized, re-saved, edited)"
+        if not core.HAS_SIMILAR_SUPPORT:
+            similar_text = "Similar images (install Pillow)"
+        self.similar_radio = ttk.Radiobutton(
+            options, text=similar_text, value=core.MODE_SIMILAR,
+            variable=self.mode, command=self._update_mode_state,
+            state="normal" if core.HAS_SIMILAR_SUPPORT else "disabled")
+        self.similar_radio.grid(row=1, column=1, columnspan=2, sticky="w")
+
+        ttk.Label(options, text="Similarity:").grid(row=2, column=0, sticky="w",
+                                                   padx=6, pady=(2, 0))
+        self.similarity = tk.IntVar(value=core.DEFAULT_SIMILARITY)
+        self.similarity_text = tk.StringVar(value=f"{core.DEFAULT_SIMILARITY}%")
+
+        def on_scale(value: str) -> None:
+            self.similarity.set(round(float(value)))
+            self.similarity_text.set(f"{self.similarity.get()}%")
+
+        self.similarity_scale = ttk.Scale(options, from_=70, to=100,
+                                          orient="horizontal", command=on_scale)
+        self.similarity_scale.set(core.DEFAULT_SIMILARITY)
+        self.similarity_scale.grid(row=2, column=1, sticky="ew", pady=(2, 0))
+        self.similarity_label = ttk.Label(options, width=5,
+                                          textvariable=self.similarity_text)
+        self.similarity_label.grid(row=2, column=2, sticky="w", padx=(4, 6))
+        self.similarity_hint = ttk.Label(
+            options, foreground="#555", wraplength=360,
+            text="Higher is stricter. 90 catches resized and re-compressed "
+                 "copies. Lower values find more but may group different photos.")
+        self.similarity_hint.grid(row=3, column=0, columnspan=3, sticky="w", padx=6)
+
+        ttk.Separator(options).grid(row=4, column=0, columnspan=3, sticky="ew",
+                                    padx=6, pady=6)
         self.only_images = tk.BooleanVar(value=True)
         ttk.Radiobutton(options, text="Images only", value=True,
                         variable=self.only_images,
                         command=self._update_ext_state).grid(
-            row=0, column=0, sticky="w", padx=6, pady=(6, 0))
-        ttk.Radiobutton(options, text="All file types", value=False,
-                        variable=self.only_images,
-                        command=self._update_ext_state).grid(
-            row=0, column=1, sticky="w", padx=6, pady=(6, 0))
-        ttk.Label(options, text="Image extensions:").grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(6, 0))
+            row=5, column=0, columnspan=2, sticky="w", padx=6)
+        self.all_types_radio = ttk.Radiobutton(
+            options, text="All file types", value=False,
+            variable=self.only_images, command=self._update_ext_state)
+        self.all_types_radio.grid(row=5, column=1, columnspan=2, sticky="e", padx=6)
         self.ext_var = tk.StringVar(
             value=" ".join(sorted(e.lstrip(".") for e in core.IMAGE_EXTENSIONS)))
         self.ext_entry = ttk.Entry(options, textvariable=self.ext_var, width=44)
-        self.ext_entry.grid(row=2, column=0, columnspan=2, sticky="ew", padx=6)
+        self.ext_entry.grid(row=6, column=0, columnspan=3, sticky="ew", padx=6,
+                            pady=(2, 0))
         self.include_hidden = tk.BooleanVar(value=False)
         ttk.Checkbutton(options, text="Include hidden files and folders",
                         variable=self.include_hidden).grid(
-            row=3, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+            row=7, column=0, columnspan=3, sticky="w", padx=6, pady=6)
 
         # --- Scan bar ------------------------------------------------
         scanbar = ttk.Frame(self)
@@ -154,18 +196,23 @@ class App(tk.Tk):
         tree_frame.columnconfigure(0, weight=1)
         tree_frame.rowconfigure(0, weight=1)
         self.tree = ttk.Treeview(
-            tree_frame, columns=("action", "folder", "size", "modified"),
+            tree_frame,
+            columns=("action", "match", "folder", "dimensions", "size", "modified"),
             show="tree headings", selectmode="browse")
         self.tree.heading("#0", text="Duplicate group / file name")
         self.tree.heading("action", text="Action")
+        self.tree.heading("match", text="Match")
         self.tree.heading("folder", text="Folder")
+        self.tree.heading("dimensions", text="Dimensions")
         self.tree.heading("size", text="Size")
         self.tree.heading("modified", text="Modified")
-        self.tree.column("#0", width=260, stretch=False)
-        self.tree.column("action", width=80, anchor="center", stretch=False)
-        self.tree.column("folder", width=360)
-        self.tree.column("size", width=80, anchor="e", stretch=False)
-        self.tree.column("modified", width=130, stretch=False)
+        self.tree.column("#0", width=230, stretch=False)
+        self.tree.column("action", width=70, anchor="center", stretch=False)
+        self.tree.column("match", width=80, anchor="center", stretch=False)
+        self.tree.column("folder", width=280)
+        self.tree.column("dimensions", width=95, anchor="center", stretch=False)
+        self.tree.column("size", width=75, anchor="e", stretch=False)
+        self.tree.column("modified", width=125, stretch=False)
         self.tree.tag_configure("group", font=("TkDefaultFont", 9, "bold"))
         self.tree.tag_configure("keep", foreground="#1b6e2a")
         self.tree.tag_configure("remove", foreground="#b3261e",
@@ -211,15 +258,24 @@ class App(tk.Tk):
         ttk.Label(bottom, text="If copies are in equally ranked folders, keep the:").grid(
             row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(6, 2))
         self.tiebreak = tk.StringVar(value=core.DEFAULT_TIEBREAK)
-        ttk.Combobox(bottom, textvariable=self.tiebreak, state="readonly",
-                     values=list(core.TIEBREAKS), width=18).grid(
-            row=0, column=2, sticky="w", pady=(6, 2))
+        tiebreak_box = ttk.Combobox(bottom, textvariable=self.tiebreak,
+                                    state="readonly", values=list(core.TIEBREAKS),
+                                    width=18)
+        tiebreak_box.grid(row=0, column=2, sticky="w", pady=(6, 2))
+        tiebreak_box.bind("<<ComboboxSelected>>", lambda e: self.auto_select())
         self.auto_button = ttk.Button(bottom, text="Auto-select by folder priority",
                                       command=self.auto_select)
         self.auto_button.grid(row=0, column=3, padx=6, pady=(6, 2))
         self.keep_all_button = ttk.Button(bottom, text="Keep all",
                                           command=self.keep_all)
         self.keep_all_button.grid(row=0, column=4, pady=(6, 2))
+        self.prefer_quality = tk.BooleanVar(value=False)
+        self.prefer_quality_check = ttk.Checkbutton(
+            bottom, variable=self.prefer_quality, command=self.auto_select,
+            text="Similar images: always keep the highest-resolution copy, "
+                 "even if it's in a lower-priority folder")
+        self.prefer_quality_check.grid(row=3, column=0, columnspan=7, sticky="w",
+                                       padx=6, pady=(0, 6))
 
         ttk.Label(bottom, text="Removed files go to:").grid(
             row=1, column=0, sticky="w", padx=6, pady=(4, 6))
@@ -261,10 +317,29 @@ class App(tk.Tk):
         self.remove_button.grid(row=2, column=5, columnspan=2, sticky="e",
                                 padx=6, pady=(0, 6))
         self._update_method_state()
+        self._update_mode_state()
 
     def _update_ext_state(self) -> None:
         self.ext_entry.configure(
             state="normal" if self.only_images.get() else "disabled")
+
+    def _update_mode_state(self) -> None:
+        similar = self.mode.get() == core.MODE_SIMILAR
+        if similar:
+            # Similar matching only makes sense for pictures.
+            self.only_images.set(True)
+            if self.tiebreak.get() == core.DEFAULT_TIEBREAK:
+                self.tiebreak.set(core.DEFAULT_SIMILAR_TIEBREAK)
+        elif self.tiebreak.get() == core.DEFAULT_SIMILAR_TIEBREAK:
+            self.tiebreak.set(core.DEFAULT_TIEBREAK)
+        self.all_types_radio.configure(state="disabled" if similar else "normal")
+        self.similarity_scale.configure(state="normal" if similar else "disabled")
+        self.similarity_label.configure(state="normal" if similar else "disabled")
+        self._update_ext_state()
+
+    @property
+    def results_are_similar(self) -> bool:
+        return self.scan_mode == core.MODE_SIMILAR
 
     def _update_method_state(self) -> None:
         state = "normal" if self.method.get() == core.METHOD_MOVE else "disabled"
@@ -371,7 +446,7 @@ class App(tk.Tk):
                 elif kind == "cancelled":
                     self._set_busy(False)
                     self.progress.configure(mode="determinate", value=0)
-                    self.status.set("Scan cancelled.")
+                    self.status.set("Cancelled.")
                 elif kind == "error":
                     self._set_busy(False)
                     self.progress.configure(mode="determinate", value=0)
@@ -385,7 +460,13 @@ class App(tk.Tk):
     # Scanning
     # ------------------------------------------------------------------
 
-    def _scan_job(self, roots, extensions, include_hidden, progress):
+    def _scan_job(self, mode, roots, extensions, include_hidden, similarity,
+                  progress):
+        if mode == core.MODE_SIMILAR:
+            return core.find_similar_images(roots, extensions, include_hidden,
+                                            similarity=similarity,
+                                            progress=progress,
+                                            cancel=self.cancel_event.is_set)
         return core.find_duplicates(roots, extensions, include_hidden,
                                     progress=progress,
                                     cancel=self.cancel_event.is_set)
@@ -401,32 +482,37 @@ class App(tk.Tk):
             messagebox.showerror(APP_TITLE, "These folders can't be found:\n\n"
                                  + "\n".join(missing))
             return
+        mode = self.mode.get()
         extensions = None
-        if self.only_images.get():
+        if self.only_images.get() or mode == core.MODE_SIMILAR:
             extensions = core.parse_extensions(self.ext_var.get())
             if not extensions:
                 messagebox.showinfo(APP_TITLE, "Enter at least one file extension.")
                 return
         self.scan_roots = list(self.folders)
         self._clear_results()
+        self.scan_mode = mode
         self._scan_started = time.monotonic()
         self.status.set("Starting scan…")
-        self._run_in_background(self._scan_job, self.scan_roots, extensions,
-                                self.include_hidden.get())
+        self._run_in_background(self._scan_job, mode, self.scan_roots,
+                                extensions, self.include_hidden.get(),
+                                self.similarity.get())
 
     def _scan_finished(self, result: core.ScanResult) -> None:
         self.groups = result.groups
+        self.scan_mode = result.mode
         elapsed = time.monotonic() - self._scan_started
         copies = sum(len(g.files) - 1 for g in self.groups)
+        found = "similar" if self.results_are_similar else "identical"
         self.status.set(
             f"Scanned {result.files_scanned:,} files in {elapsed:.1f}s: "
-            f"{len(self.groups):,} images with {copies:,} extra copies.")
+            f"{len(self.groups):,} {found} groups, {copies:,} extra copies.")
         self.auto_select()  # Pre-mark copies using the folder priority.
         if result.errors:
             self._show_problems("Some files couldn't be read and were skipped:",
                                 result.errors)
         if not self.groups:
-            messagebox.showinfo(APP_TITLE, "No identical files were found.")
+            messagebox.showinfo(APP_TITLE, f"No {found} images were found.")
 
     # ------------------------------------------------------------------
     # Results list
@@ -440,21 +526,40 @@ class App(tk.Tk):
         self._clear_preview()
         self._update_summary()
 
+    @staticmethod
+    def _match_text(group: core.DuplicateGroup, f: core.FileEntry) -> str:
+        if group.kind == core.MODE_IDENTICAL:
+            return "Identical"
+        if f.similarity is None:
+            return ""
+        return f"{f.similarity:.0f}%"
+
+    @staticmethod
+    def _dimensions_text(f: core.FileEntry) -> str:
+        return f"{f.width}×{f.height}" if f.pixels else ""
+
     def _populate_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
         self.item_map.clear()
         for gi, g in enumerate(self.groups):
             gid = f"g{gi}"
+            if g.kind == core.MODE_SIMILAR:
+                label = f"{len(g.files)} similar images"
+                size = ""
+            else:
+                label = f"{len(g.files)} identical copies"
+                size = human_size(g.files[0].size)
             self.tree.insert(
-                "", "end", gid, open=True, tags=("group",),
-                text=f"{len(g.files)} identical copies",
-                values=("", f"{human_size(g.wasted_bytes)} can be freed",
-                        human_size(g.size), ""))
+                "", "end", gid, open=True, tags=("group",), text=label,
+                values=("", "", f"Up to {human_size(g.wasted_bytes)} can be freed",
+                        "", size, ""))
             for fi, f in enumerate(g.files):
                 iid = f"g{gi}f{fi}"
                 self.item_map[iid] = (gi, fi)
                 self.tree.insert(gid, "end", iid, text=os.path.basename(f.path),
-                                 values=("", os.path.dirname(f.path),
+                                 values=("", self._match_text(g, f),
+                                         os.path.dirname(f.path),
+                                         self._dimensions_text(f),
                                          human_size(f.size),
                                          time.strftime("%Y-%m-%d %H:%M",
                                                        time.localtime(f.mtime))))
@@ -469,7 +574,7 @@ class App(tk.Tk):
 
     def _update_summary(self) -> None:
         count = len(self.marked)
-        size = sum(self.groups[gi].size for gi, _ in self.marked)
+        size = sum(self.groups[gi].files[fi].size for gi, fi in self.marked)
         if count:
             self.summary.set(f"{count:,} files marked for removal "
                              f"({human_size(size)} will be freed).")
@@ -481,9 +586,12 @@ class App(tk.Tk):
             state="normal" if count and not self.busy else "disabled")
 
     def auto_select(self) -> None:
+        if self.busy:
+            return
         self.marked.clear()
+        prefer_quality = self.results_are_similar and self.prefer_quality.get()
         for gi, g in enumerate(self.groups):
-            keeper = core.choose_keeper(g, self.tiebreak.get())
+            keeper = core.choose_keeper(g, self.tiebreak.get(), prefer_quality)
             for fi, f in enumerate(g.files):
                 if f is not keeper:
                     self.marked.add((gi, fi))
@@ -559,14 +667,23 @@ class App(tk.Tk):
             return
         g = self.groups[idx[0]]
         f = g.files[idx[1]]
-        self.preview_info.set(
-            f"{os.path.basename(f.path)}\n\n{f.path}\n\n{human_size(f.size)}\n"
-            f"Modified {time.strftime('%Y-%m-%d %H:%M', time.localtime(f.mtime))}\n\n"
-            f"SHA-256: {g.digest[:16]}…")
+        lines = [os.path.basename(f.path), human_size(f.size)]
+        if f.pixels:
+            lines.append(f"{f.width} × {f.height} pixels")
+        lines.append("Modified "
+                     + time.strftime("%Y-%m-%d %H:%M", time.localtime(f.mtime)))
+        if g.kind == core.MODE_SIMILAR and f.similarity is not None:
+            lines.append(f"{f.similarity:.0f}% similar to the best image "
+                         "in this group")
+        elif f.digest:
+            lines.append(f"SHA-256: {f.digest[:16]}…")
+        self.preview_info.set("\n".join(lines))
         image = None
         try:
             if Image is not None:
                 with Image.open(f.path) as im:
+                    im.draft("RGB", (PREVIEW_SIZE, PREVIEW_SIZE))
+                    im = ImageOps.exif_transpose(im)
                     im.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE))
                     image = ImageTk.PhotoImage(im)
             elif os.path.splitext(f.path)[1].lower() in (".png", ".gif"):
@@ -581,7 +698,8 @@ class App(tk.Tk):
         else:
             self.preview_label.configure(
                 image="", text="No preview available."
-                + ("" if Image else "\n(Install Pillow for more formats.)"))
+                + ("" if Image else "\n(Install Pillow, with Tk support, "
+                                    "for previews of more formats.)"))
 
     # ------------------------------------------------------------------
     # Removal
@@ -599,9 +717,9 @@ class App(tk.Tk):
             remove = [f for fi, f in enumerate(g.files) if (gi, fi) in self.marked]
             keep = [f for fi, f in enumerate(g.files) if (gi, fi) not in self.marked]
             if remove and keep:
-                plan.append(core.RemovalItem(keep[0], g.digest, remove))
+                plan.append(core.RemovalItem(keep[0], remove))
         count = sum(len(p.remove) for p in plan)
-        size = sum(len(p.remove) * p.keeper.size for p in plan)
+        size = sum(f.size for p in plan for f in p.remove)
 
         method = self.method.get()
         move_to = None
@@ -617,13 +735,17 @@ class App(tk.Tk):
         else:
             where = "PERMANENTLY DELETED. This can't be undone"
 
-        question = (f"{count:,} files ({human_size(size)}) will be {where}.\n\n"
-                    "One copy of every image is always kept, and each file is "
-                    "checked again before it's removed.\n\nContinue?")
-        icon = "warning" if method == core.METHOD_DELETE else "question"
+        question = f"{count:,} files ({human_size(size)}) will be {where}.\n\n"
+        if self.results_are_similar:
+            question += ("These are similar images, not exact copies. Please "
+                         "check the groups before continuing.\n\n")
+        question += ("One image in every group is always kept, and each file "
+                     "is checked again before it's removed.\n\nContinue?")
+        icon = "warning" if (method == core.METHOD_DELETE
+                             or self.results_are_similar) else "question"
         if not messagebox.askyesno(APP_TITLE, question, icon=icon, parent=self):
             return
-        self.status.set("Removing duplicates…")
+        self.status.set("Removing files…")
         self._run_in_background(self._removal_job, plan, method, move_to,
                                 list(self.scan_roots))
 
@@ -646,7 +768,7 @@ class App(tk.Tk):
                 f"{len(result.skipped):,} were left in place:", result.skipped)
         else:
             messagebox.showinfo(APP_TITLE,
-                                f"Removed {len(result.removed):,} duplicate files.")
+                                f"Removed {len(result.removed):,} files.")
 
     def _show_problems(self, heading: str, problems) -> None:
         win = tk.Toplevel(self)

@@ -76,7 +76,7 @@ class CoreTests(unittest.TestCase):
     def test_tiebreak_within_same_folder(self):
         result = core.find_duplicates([self.b])
         group = next(g for g in result.groups if len(g.files) == 2
-                     and g.size == len(self.img))
+                     and g.files[0].size == len(self.img))
         self.assertEqual(os.path.basename(core.choose_keeper(group, "Oldest file").path),
                          "IMG_0001.png")
         self.assertEqual(os.path.basename(core.choose_keeper(group, "Newest file").path),

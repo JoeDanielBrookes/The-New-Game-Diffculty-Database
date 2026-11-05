@@ -29,6 +29,35 @@ The Match column shows *Identical* for exact copies. For similar images it
 shows how close each image is to the highest-resolution image in its group,
 and the Dimensions column shows each image's size in pixels.
 
+## Windows: download the ready-made app (easiest)
+
+A standalone `DuplicateImageFinder.exe` is built automatically on GitHub's
+Windows build servers whenever the app changes. It needs no Python and no
+installation.
+
+1. Open the repository's **Releases** page on GitHub and pick the newest
+   *Duplicate Image Finder for Windows* release.
+2. Download **`DuplicateImageFinder.exe`** and put it wherever you like, for
+   example in Documents or on your desktop.
+3. Double-click it. Because the program isn't code-signed, Windows may say
+   *"Windows protected your PC"*. Click **More info → Run anyway**. You only
+   need to do this once.
+
+To pin it, right-click the .exe and choose *Show more options → Pin to Start*
+or *Send to → Desktop (create shortcut)*. It starts a few seconds slower than
+the installed version because it unpacks itself each time it opens.
+
+Every build also runs the tests on Windows and checks that the .exe starts,
+before publishing it. To build it by hand on a Windows PC:
+
+```bat
+cd duplicate_image_finder
+pip install -r requirements.txt pyinstaller
+python build_exe.py
+```
+
+The .exe is written to `dist\DuplicateImageFinder.exe`.
+
 ## Installing it on your computer (with a desktop shortcut)
 
 1. **Install Python 3.9 or newer** if you don't already have it, from
@@ -175,11 +204,12 @@ cd duplicate_image_finder
 python -m unittest discover -s tests -v
 ```
 
-## Making a standalone .exe / .app (optional)
+## Making a standalone program for macOS or Linux
+
+`build_exe.py` also works on macOS and Linux. Run it on the system you want a
+program for, because PyInstaller can't build for other systems:
 
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "Duplicate Image Finder" app.py
+pip install -r requirements.txt pyinstaller
+python build_exe.py
 ```
-
-The program is written to `dist/`.

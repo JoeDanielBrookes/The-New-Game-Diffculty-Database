@@ -24,6 +24,11 @@ except ImportError:  # pragma: no cover - depends on the environment
 
 
 APP_TITLE = "Duplicate Image Finder"
+APP_VERSION = "1.0"
+# Bundled files live next to app.py, or inside the .exe when packaged with
+# PyInstaller (which unpacks them to sys._MEIPASS).
+ASSETS_DIR = os.path.join(
+    getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "assets")
 PREVIEW_SIZE = 170
 
 
@@ -168,7 +173,7 @@ class App(tk.Tk):
         self.destroy()
 
     def _set_icon(self) -> None:
-        assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+        assets = ASSETS_DIR
         try:
             if sys.platform.startswith("win"):
                 # Show the app's own icon in the taskbar instead of Python's.
@@ -1054,7 +1059,58 @@ class App(tk.Tk):
         ttk.Button(win, text="Close", command=win.destroy).pack(pady=10)
 
 
+def self_test(report_path: str) -> int:
+    """Check the app's parts load (used to test the packaged .exe).
+
+    A windowed .exe has no console, so results are written to *report_path*.
+    Returns 0 if everything works.
+    """
+    lines, failed = [f"{APP_TITLE} {APP_VERSION} self-test"], False
+
+    def check(name, func):
+        nonlocal failed
+        try:
+            detail = func()
+            lines.append(f"OK    {name}" + (f": {detail}" if detail else ""))
+        except Exception as exc:
+            failed = True
+            lines.append(f"FAIL  {name}: {exc!r}")
+
+    def window():
+        app = App()
+        app.update()
+        app.destroy()
+
+    def fingerprint():
+        fp = core.image_fingerprint(os.path.join(ASSETS_DIR, "icon.png"))
+        return f"{fp.width}x{fp.height}"
+
+    def heif():
+        import pillow_heif  # noqa: F401
+        return pillow_heif.__version__
+
+    def require(ok, message):
+        if not ok:
+            raise RuntimeError(message)
+        return "available"
+
+    check("Similar-image support (Pillow)",
+          lambda: require(core.HAS_SIMILAR_SUPPORT, "Pillow is missing"))
+    check("Recycle Bin support (send2trash)",
+          lambda: require(core.send2trash is not None, "send2trash is missing"))
+    check("HEIC support (pillow-heif)", heif)
+    check("Image fingerprint", fingerprint)
+    check("Main window", window)
+    lines.append("PASSED" if not failed else "FAILED")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return 1 if failed else 0
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        report = sys.argv[2] if len(sys.argv) > 2 else "self-test.txt"
+        sys.exit(self_test(report))
     app = App()
     app.mainloop()
 
